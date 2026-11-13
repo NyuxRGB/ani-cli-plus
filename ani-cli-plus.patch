@@ -1,0 +1,87 @@
+--- ani-cli/ani-cli	2026-11-13 15:33:00.097003414 +0100
++++ ani-cli-plus	2026-11-13 15:38:56.342993785 +0100
+@@ -79,6 +79,12 @@
+         Use rofi instead of fzf for the interactive menu
+       --dmenu
+         Use dmenu instead of fzf for the interactive menu
++      --no-discord
++        Disable Discord Rich Presence (needs ani-tracker, mpv only)
++      --no-anilist
++        Disable AniList progress sync (needs ani-tracker, mpv only)
++      --anilist-login
++        Log in to AniList for progress sync (an existing curd login is reused automatically)
+       --skip
+         Use ani-skip to skip the intro of the episode (mpv only)
+       --no-detach
+@@ -365,6 +371,21 @@
+     nohup am start --user 0 -a android.intent.action.VIEW -d "$video_link" -n is.xyz.mpv/.MPVActivity -e "title" "${anime_title} Episode ${ep_no}" $player_extra_flags >/dev/null 2>&1 &
+ }
+ 
++# starts ani-tracker next to mpv: Discord Rich Presence + AniList progress sync.
++# sets ipc_flag, which the mpv command line passes on
++start_tracker() {
++    unset ipc_flag
++    [ -n "$tracker_exe" ] || return 0
++    [ "$discord_presence" = 0 ] && [ "$anilist_sync" = 0 ] && return 0
++    _ipc_sock="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/ani-cli-$$-$(date +%s).sock"
++    ipc_flag="--input-ipc-server=$_ipc_sock"
++    _tracker_flags=""
++    [ "$discord_presence" = 0 ] && _tracker_flags="--no-discord"
++    [ "$anilist_sync" = 0 ] && _tracker_flags="$_tracker_flags --no-anilist"
++    # shellcheck disable=SC2086
++    nohup "$tracker_exe" --socket "$_ipc_sock" --mal-id "${mal_id:-0}" --episode "$ep_no" --title "$anime_title" $_tracker_flags >/dev/null 2>&1 &
++}
++
+ play_episode() {
+     [ "$log_episode" = 1 ] && [ "$player_function" != "debug" ] && [ "$player_function" != "download" ] && command -v logger >/dev/null && logger -t ani-cli "${anime_title} ${ep_no}"
+     [ -z "$video_link" ] && get_video_link
+@@ -378,10 +399,12 @@
+         android_vlc) nohup am start --user 0 -a android.intent.action.VIEW -d "$video_link" -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -e "title" "${anime_title} Episode ${ep_no}" $player_extra_flags >/dev/null 2>&1 & ;;
+         *flatpak*mpv*) flatpak run io.mpv.Mpv --referrer="$refr" ${audio_link:+--audio-file="$audio_link"} ${sub_link:+--sub-file="$sub_link"} $skip_flag $player_extra_flags --force-media-title="${anime_title} Episode ${ep_no}" "$video_link" >/dev/null 2>&1 & ;;
+         *mpv*)
++            # Windows mpv can't use the unix socket ani-tracker reads
++            case "$player_function" in *.exe) unset ipc_flag ;; *) start_tracker ;; esac
+             if [ "$no_detach" = 0 ]; then
+-                nohup $player_function --referrer="$refr" ${audio_link:+--audio-file="$audio_link"} ${sub_link:+--sub-file="$sub_link"} $skip_flag $player_extra_flags --force-media-title="${anime_title} Episode ${ep_no}" "$video_link" >/dev/null 2>&1 &
++                nohup $player_function --referrer="$refr" ${audio_link:+--audio-file="$audio_link"} ${sub_link:+--sub-file="$sub_link"} $skip_flag $ipc_flag $player_extra_flags --force-media-title="${anime_title} Episode ${ep_no}" "$video_link" >/dev/null 2>&1 &
+             else
+-                $player_function --referrer="$refr" ${audio_link:+--audio-file="$audio_link"} ${sub_link:+--sub-file="$sub_link"} $skip_flag $player_extra_flags --force-media-title="${anime_title} Episode ${ep_no}" "$video_link"
++                $player_function --referrer="$refr" ${audio_link:+--audio-file="$audio_link"} ${sub_link:+--sub-file="$sub_link"} $skip_flag $ipc_flag $player_extra_flags --force-media-title="${anime_title} Episode ${ep_no}" "$video_link"
+                 mpv_exitcode=$?
+                 [ "$exit_after_play" = 1 ] && [ -z "$_range" ] && exit "$mpv_exitcode"
+             fi
+@@ -480,6 +503,9 @@
+ exit_after_play="${ANI_CLI_EXIT_AFTER_PLAY:-0}"
+ skip_intro="${ANI_CLI_SKIP_INTRO:-0}"
+ menu_program="${ANI_CLI_MENU:-fzf}"
++discord_presence="${ANI_CLI_DISCORD:-1}"
++anilist_sync="${ANI_CLI_ANILIST:-1}"
++tracker_exe="${ANI_CLI_TRACKER:-$(command -v ani-tracker)}"
+ menu_extra_flags="${ANI_CLI_MENU_FLAGS:-""}"
+ 
+ # not opening from a terminal
+@@ -555,8 +581,16 @@
+         --rofi) menu_program=rofi ;;
+         --dmenu) menu_program=dmenu ;;
+         --skip) skip_intro=1 ;;
++        --no-discord) discord_presence=0 ;;
++        --no-anilist) anilist_sync=0 ;;
++        --anilist-login)
++            [ -n "$tracker_exe" ] || die "ani-tracker not found"
++            "$tracker_exe" login
++            exit $?
++            ;;
+         -N | --nextep-countdown) source=nextep ;;
+         -U | --update)
++            die "ani-cli-plus is a patched copy: update ani-cli upstream and re-apply the patch instead"
+             dep_ch "patch"
+             branch="${2:-$branch}"
+             update_script
+@@ -573,6 +607,7 @@
+ dep_ch "sed"
+ dep_ch "grep"
+ [ "$skip_intro" = 1 ] && dep_ch "ani-skip"
++[ -z "$tracker_exe" ] && { [ "$discord_presence" = 1 ] || [ "$anilist_sync" = 1 ]; } && info "ani-tracker not found: no Discord presence / AniList sync"
+ dep_ch "$menu_program" # TODO: use dep_ch_failover to iterate through options
+ 
+ case "$player_function" in

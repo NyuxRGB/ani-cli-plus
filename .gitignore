@@ -1,0 +1,6 @@
+# built binary
+/ani-tracker/ani-tracker
+
+# leftovers from patch
+*.orig
+*.rej
